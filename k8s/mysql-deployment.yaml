@@ -1,0 +1,96 @@
+# ============================================================
+# Partie 2A : Base de donnees MySQL
+# PersistentVolume + PersistentVolumeClaim + Deployment + Service
+# ============================================================
+
+# ---------- 1. PersistentVolume : le stockage physique ----------
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mysql-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce            # monte en lecture/ecriture par un seul noeud
+  storageClassName: manual     # lie explicitement ce PV au PVC ci-dessous
+  hostPath:
+    path: /data/mysql          # dossier sur le noeud minikube
+  persistentVolumeReclaimPolicy: Retain
+
+---
+# ---------- 2. PersistentVolumeClaim : la demande de stockage ----------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: devops
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# ---------- 3. Deployment MySQL ----------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: devops
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate             # un seul pod a la fois : le volume n'est pas partageable
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "root123"
+            - name: MYSQL_DATABASE
+              value: "springdb"
+            # Utilisateur applicatif attendu par le Secret spring-secret
+            - name: MYSQL_USER
+              value: "spring"
+            - name: MYSQL_PASSWORD
+              value: "spring123"
+          volumeMounts:
+            - name: mysql-storage
+              mountPath: /var/lib/mysql
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot123"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+      volumes:
+        - name: mysql-storage
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+
+---
+# ---------- 4. Service MySQL (ClusterIP : interne uniquement) ----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+  namespace: devops
+spec:
+  type: ClusterIP              # pas d'acces depuis l'exterieur du cluster
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+      targetPort: 3306
